@@ -349,8 +349,12 @@ internal sealed class WheelController
             Log.Write($"Converted in {sw.ElapsedMilliseconds} ms");
             return result;
         }, cts.Token);
-        _ = conversion.ContinueWith(t => _ghost.SetDone(session, t.Status == TaskStatus.RanToCompletion),
-            TaskScheduler.FromCurrentSynchronizationContext());
+        _ = conversion.ContinueWith(t =>
+        {
+            if (_conversionCts == cts) _conversionCts = null;
+            cts.Dispose();
+            _ghost.SetDone(session, t.Status == TaskStatus.RanToCompletion);
+        }, TaskScheduler.FromCurrentSynchronizationContext());
         _conversion = conversion;
     }
 
