@@ -11,9 +11,11 @@
     <!-- для публикации пакета, которым пользуются авторы расширений -->
     <PackageId>FormatWheel.Sdk</PackageId>
     <Version>1.0.0</Version>
-    <Authors>bogat</Authors>
+    <Authors>KantraCity</Authors>
     <Description>SDK for writing Format Wheel extensions (converters).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/KantraCity/FormatWheel</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/KantraCity/FormatWheel-app</RepositoryUrl>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
 
