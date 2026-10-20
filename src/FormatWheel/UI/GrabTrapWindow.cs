@@ -41,12 +41,19 @@ internal sealed class GrabTrapWindow : Window
 
     public void ArmAt(Native.POINT cursor)
     {
+        ShowAt(cursor);
+        _armed = true;
+    }
+
+    // просто показать под курсором, не ловя клик (чтобы получатель драга переспросил данные)
+    public void ShowAt(Native.POINT cursor)
+    {
+        _armed = false;
         Show();
         Native.GetWindowRect(_hwnd, out var r);
         int w = r.Right - r.Left, h = r.Bottom - r.Top;
         Native.SetWindowPos(_hwnd, IntPtr.Zero, cursor.X - w / 2, cursor.Y - h / 2, 0, 0,
             Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
-        _armed = true;
     }
 
     public void Disarm()

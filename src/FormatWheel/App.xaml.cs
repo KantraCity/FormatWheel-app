@@ -35,7 +35,7 @@ public partial class App : Application
         }
 
         OutputPath.TempRoot = Paths.TempRoot; // расширения пишут файлы сюда же
-        Paths.CleanupOld(TimeSpan.FromDays(1));
+        StartCleanup();
         Log.TrimOnStartup();
         Log.Write($"=== Format Wheel started, UI language: {System.Globalization.CultureInfo.CurrentUICulture.Name} ===");
         CreateTray();
@@ -51,6 +51,11 @@ public partial class App : Application
 
         LoadConverters();
 
+        Perf.Apply();
+        // Magick.NET сам распараллеливает каждую картинку на все ядра, а мы ещё и несколько файлов
+        // параллельно — на слабом ПК это забивало процессор целиком. Делим ядра честно.
+        ImageMagick.ResourceLimits.Thread = (ulong)Math.Max(1, Environment.ProcessorCount / 2);
+
         _controller = new WheelController(Notify);
         _hook = new KeyboardHook();
         _hook.ShiftChanged += down => Dispatcher.InvokeAsync(() => _controller.OnShift(down));
@@ -64,6 +69,16 @@ public partial class App : Application
         else if (Formats.HeicHidden) Notify(Loc.S.RunningTitle, Loc.S.HeicMissingText);
         else Notify(Loc.S.RunningTitle, Loc.S.RunningText);
     }
+
+    // Чистка папки копий: сразу при запуске и потом раз в час — программа живёт в трее неделями,
+    // и чистка только при старте копила гигабайты видео. В фоне: удаление гигабайт не должно тормозить запуск.
+    private static readonly TimeSpan CopiesMaxAge = TimeSpan.FromDays(1);
+    private static readonly TimeSpan CopiesMinAge = TimeSpan.FromMinutes(10);
+    private const long CopiesMaxBytes = 2L * 1024 * 1024 * 1024; // 2 ГБ
+    private Timer? _cleanup;
+
+    private void StartCleanup() =>
+        _cleanup = new Timer(_ => Paths.Cleanup(CopiesMaxAge, CopiesMaxBytes, CopiesMinAge), null, TimeSpan.FromSeconds(5), TimeSpan.FromHours(1));
 
     // картинки — встроенный конвертер, всё остальное из DLL-расширений
     private void LoadConverters()

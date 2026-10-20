@@ -19,9 +19,18 @@
                     <RotateTransform x:Name="ContentRotate" Angle="-120" />
                 </TransformGroup>
             </Grid.RenderTransform>
-            <Grid.Effect>
-                <DropShadowEffect BlurRadius="40" ShadowDepth="8" Opacity="0.45" Color="#000000" Direction="270" />
-            </Grid.Effect>
+            <!-- Статичный фон: тень, ореол, диск. BitmapCache — растеризуется один раз и дальше
+                 только масштабируется/поворачивается картинкой. Тень — градиент, а не DropShadowEffect:
+                 размытие пересчитывалось на каждом движении стрелки и на слабых ПК давало лаг. -->
+            <Grid CacheMode="BitmapCache" IsHitTestVisible="False">
+            <Ellipse Width="372" Height="372" Margin="0,16,0,0">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#66000000" Offset="0.82" />
+                        <GradientStop Color="#00000000" Offset="1" />
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
 
             <Ellipse Width="378" Height="378">
                 <Ellipse.Fill>
@@ -48,6 +57,7 @@
                     </LinearGradientBrush>
                 </Ellipse.Stroke>
             </Ellipse>
+            </Grid>
 
             <Canvas x:Name="PetalCanvas" Width="380" Height="380" />
 

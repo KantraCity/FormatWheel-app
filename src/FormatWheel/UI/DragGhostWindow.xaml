@@ -11,11 +11,18 @@
     <!-- курсор в точке (40, 40): кольцо вокруг него, карточка справа снизу -->
     <Canvas x:Name="Root" Opacity="0">
         <Ellipse Canvas.Left="28" Canvas.Top="28" Width="24" Height="24" Fill="#4D101216" />
-        <local:ProgressRing x:Name="Ring" Canvas.Left="28" Canvas.Top="28" Width="24" Height="24" Thickness="2.5">
-            <local:ProgressRing.Effect>
-                <DropShadowEffect x:Name="RingGlow" Color="#6E9BFF" BlurRadius="8" ShadowDepth="0" Opacity="0.55" />
-            </local:ProgressRing.Effect>
-        </local:ProgressRing>
+        <local:ProgressRing x:Name="Ring" Canvas.Left="28" Canvas.Top="28" Width="24" Height="24" Thickness="2.5" />
+
+        <!-- тень карточки — градиентная подложка, а не DropShadowEffect: размытие пересчитывалось
+             при каждом изменении процентов и на слабых ПК тормозило перетаскивание -->
+        <Border Canvas.Left="54" Canvas.Top="58" Width="144" Height="148" CornerRadius="20" IsHitTestVisible="False">
+            <Border.Background>
+                <RadialGradientBrush RadiusX="0.55" RadiusY="0.55">
+                    <GradientStop Color="#73000000" Offset="0.6" />
+                    <GradientStop Color="#00000000" Offset="1" />
+                </RadialGradientBrush>
+            </Border.Background>
+        </Border>
 
         <Border x:Name="Card" Canvas.Left="58" Canvas.Top="56" Width="136"
                 CornerRadius="16" BorderThickness="1" Padding="6"
@@ -35,9 +42,6 @@
             <Border.RenderTransform>
                 <ScaleTransform x:Name="CardScale" ScaleX="1" ScaleY="1" />
             </Border.RenderTransform>
-            <Border.Effect>
-                <DropShadowEffect BlurRadius="28" ShadowDepth="6" Opacity="0.5" Color="Black" Direction="270" />
-            </Border.Effect>
             <StackPanel>
                 <Grid Height="96">
                     <Border x:Name="Thumb" CornerRadius="9" Background="#1AFFFFFF" />

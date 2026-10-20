@@ -24,9 +24,6 @@ public partial class DragGhostWindow : Window
     private static readonly Brush DoneRing = Frozen(new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)));
     private static readonly Brush ErrorRing = Frozen(new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44)));
     private static readonly Brush PlaceholderThumb = Frozen(new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF)));
-    private static readonly Color AccentGlow = Color.FromRgb(0x6E, 0x9B, 0xFF);
-    private static readonly Color DoneGlow = Color.FromRgb(0x22, 0xC5, 0x5E);
-    private static readonly Color ErrorGlow = Color.FromRgb(0xEF, 0x44, 0x44);
 
     private readonly IntPtr _hwnd;
     private readonly DispatcherTimer _follow;
@@ -43,7 +40,7 @@ public partial class DragGhostWindow : Window
         _hwnd = new WindowInteropHelper(this).EnsureHandle();
         Native.SetExStyle(_hwnd, add: Native.WS_EX_TRANSPARENT | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW, remove: 0);
 
-        _follow = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(10) };
+        _follow = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(Perf.Lite ? 16 : 10) };
         _follow.Tick += (_, _) => { if (Following) MoveToCursor(); };
     }
 
@@ -57,6 +54,7 @@ public partial class DragGhostWindow : Window
         CountBadge.Visibility = fileCount > 1 ? Visibility.Visible : Visibility.Collapsed;
 
         Following = true;
+        _lastCursor.X = int.MinValue;
         Show();
         MoveToCursor();
         _follow.Start();
@@ -78,7 +76,6 @@ public partial class DragGhostWindow : Window
         Ring.BeginAnimation(ProgressRing.ValueProperty, null);
         Ring.Value = 0;
         Ring.RingBrush = AccentRing;
-        RingGlow.Color = AccentGlow;
         BadgeText.Text = badge;
         Status.Text = Loc.S.Converting;
         Percent.Text = "0%";
@@ -97,12 +94,21 @@ public partial class DragGhostWindow : Window
         if (session != _session || _done) return;
         value = Math.Clamp(value, 0, 0.99);
         if (value <= _target) return;
+        // в лёгком режиме — шагами по 2%, без плавной анимации: каждый кадр кольца — перерисовка окна
+        if (Perf.Lite && value - _target < 0.02) return;
         _target = value;
-        Ring.BeginAnimation(ProgressRing.ValueProperty, new DoubleAnimation(value, TimeSpan.FromMilliseconds(160))
+        if (Perf.Lite)
         {
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        });
-        Percent.Text = $"{(int)Math.Round(value * 100)}%";
+            Ring.BeginAnimation(ProgressRing.ValueProperty, null);
+            Ring.Value = value;
+        }
+        else
+            Ring.BeginAnimation(ProgressRing.ValueProperty, new DoubleAnimation(value, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            });
+        string percent = $"{(int)Math.Round(value * 100)}%";
+        if (Percent.Text != percent) Percent.Text = percent;
     }
 
     public void SetDone(int session, bool success)
@@ -111,7 +117,6 @@ public partial class DragGhostWindow : Window
         _done = true;
         Ring.BeginAnimation(ProgressRing.ValueProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(180)));
         Ring.RingBrush = success ? DoneRing : ErrorRing;
-        RingGlow.Color = success ? DoneGlow : ErrorGlow;
         Status.Text = success ? Loc.S.Done : Loc.S.Failed;
         Percent.Text = success ? "✓" : "!";
         Percent.Foreground = success ? DoneRing : ErrorRing;
@@ -142,9 +147,13 @@ public partial class DragGhostWindow : Window
         Hide();
     }
 
+    private Native.POINT _lastCursor = new() { X = int.MinValue };
+
     public void MoveToCursor()
     {
         Native.GetCursorPos(out var p);
+        if (p.X == _lastCursor.X && p.Y == _lastCursor.Y && IsVisible) return; // мышь стоит — окно не двигаем
+        _lastCursor = p;
         Native.GetWindowRect(_hwnd, out var r);
         double k = (r.Right - r.Left) / DesignWidth;
         if (k <= 0) k = 1;

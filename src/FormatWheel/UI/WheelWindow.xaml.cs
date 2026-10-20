@@ -49,13 +49,18 @@ public partial class WheelWindow : Window
     private static readonly Brush HitBrush = Frozen(new SolidColorBrush(Color.FromArgb(0x01, 0, 0, 0)));
     private static readonly Brush EmptyThumb = Frozen(new SolidColorBrush(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF)));
 
-    private sealed record Petal(Canvas Group, ScaleTransform Grow, TranslateTransform Lift, Path Highlight, DropShadowEffect Glow, TextBlock Label, double AngleDeg);
+    // Halo — свечение выбранного лепестка: широкая полупрозрачная обводка вместо DropShadowEffect (без размытия, дёшево)
+    private sealed record Petal(Canvas Group, ScaleTransform Grow, TranslateTransform Lift, Path Highlight, Path Halo, TextBlock Label, double AngleDeg);
+
+    private static readonly Brush HaloBrush = Frozen(new SolidColorBrush(Color.FromArgb(0x55, 0x6E, 0x9B, 0xFF)));
 
     private readonly List<Petal> _petals = new();
     private readonly DispatcherTimer _timer;
     private readonly IntPtr _hwnd;
     private IReadOnlyList<WheelItem> _items = Array.Empty<WheelItem>();
-    private Path _arrow = null!;
+    private Canvas _arrow = null!;
+    private Native.POINT _lastCursor = new() { X = int.MinValue };
+    private double _lastArrowAngle = double.NaN;
     private RotateTransform _arrowRotate = null!;
 
     private bool _acceptDrops = true;
@@ -77,7 +82,8 @@ public partial class WheelWindow : Window
         BuildArrow();
         BuildKeyChips();
 
-        _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(12) };
+        // 60 раз в секунду (30 в лёгком режиме); работа — только когда курсор сдвинулся
+        _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(Perf.Lite ? 33 : 16) };
         _timer.Tick += (_, _) => Tick();
 
         _hwnd = new WindowInteropHelper(this).EnsureHandle();
@@ -140,6 +146,19 @@ public partial class WheelWindow : Window
         Native.GetCursorPos(out var p);
         if (Math.Sqrt(Math.Pow(p.X - cx, 2) + Math.Pow(p.Y - cy, 2)) > CenterR * k)
             Native.SetCursorPos((int)Math.Round(cx), (int)Math.Round(cy));
+        ConfineTo(cx, cy, k);
+        _lastCursor.X = int.MinValue; // пересчитать выбор на ближайшем тике
+
+        if (Perf.Lite)
+        {
+            // без пружины и поворота: только быстрое проявление
+            Stop(ContentScale, ScaleTransform.ScaleXProperty, 1);
+            Stop(ContentScale, ScaleTransform.ScaleYProperty, 1);
+            Stop(ContentRotate, RotateTransform.AngleProperty, 0);
+            WheelContent.BeginAnimation(OpacityProperty, new DoubleAnimation(1, Ms(90)));
+            AnimatePetalsIn();
+            return;
+        }
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         var pop = new BackEase { Amplitude = 0.25, EasingMode = EasingMode.EaseOut };
@@ -172,6 +191,13 @@ public partial class WheelWindow : Window
         var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
         var fade = new DoubleAnimation(0, duration) { EasingFunction = ease };
         fade.Completed += (_, _) => { if (session == _closeSession) HideWheel(); };
+
+        if (Perf.Lite)
+        {
+            // только гаснет: складывание с поворотом на слабом ПК стоит десятка тяжёлых кадров
+            WheelContent.BeginAnimation(OpacityProperty, fade);
+            return;
+        }
 
         ContentScale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(FoldedScale, duration) { EasingFunction = ease });
         ContentScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(FoldedScale, duration) { EasingFunction = ease });
@@ -217,21 +243,22 @@ public partial class WheelWindow : Window
     {
         if (!_revealed) return;
 
-        GetGeometry(out double cx, out double cy, out double k);
+        // курсор не двигался — пересчитывать нечего (на слабом ПК каждый лишний кадр прозрачного окна дорог)
         Native.GetCursorPos(out var p);
+        if (p.X == _lastCursor.X && p.Y == _lastCursor.Y) return;
+        _lastCursor = p;
+
+        GetGeometry(out double cx, out double cy, out double k);
         double dx = (p.X - cx) / k, dy = (p.Y - cy) / k;
         double dist = Math.Sqrt(dx * dx + dy * dy);
 
         if (_confine)
         {
-            Native.ConfineCursor(new Native.RECT
-            {
-                Left = (int)(cx - HitR * k), Top = (int)(cy - HitR * k),
-                Right = (int)(cx + HitR * k), Bottom = (int)(cy + HitR * k)
-            });
             double maxR = OuterR - 4;
             if (dist > maxR)
             {
+                // вырвался за колесо (ClipCursor сбрасывает сама Windows, например при смене окна) — вернём
+                ConfineTo(cx, cy, k);
                 double s = maxR / dist;
                 dx *= s; dy *= s; dist = maxR;
                 Native.SetCursorPos((int)Math.Round(cx + dx * k), (int)Math.Round(cy + dy * k));
@@ -247,24 +274,44 @@ public partial class WheelWindow : Window
             index = (int)(relative / step) % _petals.Count;
         }
 
-        if (dist > 4) _arrowRotate.Angle = Math.Atan2(dy, dx) * 180 / Math.PI + 90;
-        _arrow.Opacity = Math.Clamp((dist - 8) / (CenterR - 8), 0, 1);
+        // стрелку поворачиваем, только если угол заметно изменился — меньше перерисовок
+        if (dist > 4)
+        {
+            double angle = Math.Atan2(dy, dx) * 180 / Math.PI + 90;
+            if (double.IsNaN(_lastArrowAngle) || Math.Abs(angle - _lastArrowAngle) > 0.7)
+            {
+                _lastArrowAngle = angle;
+                _arrowRotate.Angle = angle;
+            }
+        }
+        double arrowOpacity = Math.Round(Math.Clamp((dist - 8) / (CenterR - 8), 0, 1), 2);
+        if (_arrow.Opacity != arrowOpacity) _arrow.Opacity = arrowOpacity;
 
         SetSelected(index);
     }
 
+    private void ConfineTo(double cx, double cy, double k) =>
+        Native.ConfineCursor(new Native.RECT
+        {
+            Left = (int)(cx - HitR * k), Top = (int)(cy - HitR * k),
+            Right = (int)(cx + HitR * k), Bottom = (int)(cy + HitR * k)
+        });
+
     private void SetSelected(int index, bool force = false)
     {
         if (index == SelectedIndex && !force) return;
+        int previous = SelectedIndex;
         SelectedIndex = index;
 
+        // анимируем только два лепестка — тот, с которого ушли, и тот, на который пришли
         for (int i = 0; i < _petals.Count; i++)
         {
+            if (!force && i != previous && i != index) continue;
             bool selected = i == index;
             var petal = _petals[i];
             double rad = petal.AngleDeg * Math.PI / 180;
             Animate(petal.Highlight, OpacityProperty, selected ? 1 : 0);
-            Animate(petal.Glow, DropShadowEffect.OpacityProperty, selected ? 0.85 : 0);
+            Animate(petal.Halo, OpacityProperty, selected ? 1 : 0);
             Animate(petal.Lift, TranslateTransform.XProperty, selected ? Math.Cos(rad) * LiftPx : 0);
             Animate(petal.Lift, TranslateTransform.YProperty, selected ? Math.Sin(rad) * LiftPx : 0);
             petal.Label.FontWeight = selected ? FontWeights.Bold : FontWeights.SemiBold;
@@ -295,12 +342,14 @@ public partial class WheelWindow : Window
             Stop(petal.Grow, ScaleTransform.ScaleXProperty, 0.5);
             Stop(petal.Grow, ScaleTransform.ScaleYProperty, 0.5);
             Stop(petal.Highlight, OpacityProperty, 0);
-            Stop(petal.Glow, DropShadowEffect.OpacityProperty, 0);
+            Stop(petal.Halo, OpacityProperty, 0);
             Stop(petal.Lift, TranslateTransform.XProperty, 0);
             Stop(petal.Lift, TranslateTransform.YProperty, 0);
             petal.Label.FontWeight = FontWeights.SemiBold;
         }
         _arrow.Opacity = 0;
+        _lastCursor.X = int.MinValue;
+        _lastArrowAngle = double.NaN;
 
         HitArea.Fill = HitBrush;
         AllowDrop = _acceptDrops;
@@ -312,6 +361,18 @@ public partial class WheelWindow : Window
 
     private void AnimatePetalsIn()
     {
+        if (Perf.Lite)
+        {
+            // все лепестки сразу, без поочерёдного «распускания»
+            foreach (var petal in _petals)
+            {
+                Stop(petal.Grow, ScaleTransform.ScaleXProperty, 1);
+                Stop(petal.Grow, ScaleTransform.ScaleYProperty, 1);
+                Stop(petal.Group, OpacityProperty, 1);
+            }
+            return;
+        }
+
         var ease = new BackEase { Amplitude = 0.3, EasingMode = EasingMode.EaseOut };
         for (int i = 0; i < _petals.Count; i++)
         {
@@ -385,8 +446,9 @@ public partial class WheelWindow : Window
 
             group.Children.Add(new Path { Data = geometry, Fill = PetalFill, Stroke = PetalStroke, StrokeThickness = 1 });
 
-            var glow = new DropShadowEffect { Color = AccentColor, BlurRadius = 34, ShadowDepth = 0, Opacity = 0 };
-            var highlight = new Path { Data = geometry, Fill = AccentFill, Opacity = 0, Effect = glow };
+            var halo = new Path { Data = geometry, Stroke = HaloBrush, StrokeThickness = 8, StrokeLineJoin = PenLineJoin.Round, Opacity = 0 };
+            var highlight = new Path { Data = geometry, Fill = AccentFill, Opacity = 0 };
+            group.Children.Add(halo);
             group.Children.Add(highlight);
 
             var stack = new StackPanel { Width = 84 };
@@ -416,7 +478,7 @@ public partial class WheelWindow : Window
             group.Children.Add(stack);
 
             PetalCanvas.Children.Add(group);
-            _petals.Add(new Petal(group, grow, lift, highlight, glow,
+            _petals.Add(new Petal(group, grow, lift, highlight, halo,
                 (TextBlock)stack.Children[item.Icon != null ? 1 : 0], mid));
         }
 
@@ -462,19 +524,19 @@ public partial class WheelWindow : Window
         geometry.Figures.Add(figure);
         geometry.Freeze();
 
+        // свечение — та же дуга пошире и полупрозрачная под основной, вместо DropShadowEffect
         _arrowRotate = new RotateTransform(0, C, C);
-        _arrow = new Path
+        _arrow = new Canvas { Width = WheelSize, Height = WheelSize, RenderTransform = _arrowRotate, Opacity = 0, IsHitTestVisible = false };
+        _arrow.Children.Add(new Path
         {
-            Data = geometry,
-            Stroke = AccentFill,
-            StrokeThickness = 3.5,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-            RenderTransform = _arrowRotate,
-            Opacity = 0,
-            IsHitTestVisible = false,
-            Effect = new DropShadowEffect { Color = AccentColor, BlurRadius = 14, ShadowDepth = 0, Opacity = 0.8 }
-        };
+            Data = geometry, Stroke = HaloBrush, StrokeThickness = 10,
+            StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round
+        });
+        _arrow.Children.Add(new Path
+        {
+            Data = geometry, Stroke = AccentFill, StrokeThickness = 3.5,
+            StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round
+        });
     }
 
     private static Geometry RingSector(Point c, double r1, double r2, double a0, double a1)
@@ -498,8 +560,16 @@ public partial class WheelWindow : Window
         return geometry;
     }
 
-    private static void Animate(IAnimatable target, DependencyProperty property, double to) =>
-        target.BeginAnimation(property, new DoubleAnimation(to, Ms(130)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+    private static readonly IEasingFunction SelectEase = Frozen(new CubicEase { EasingMode = EasingMode.EaseOut });
+
+    // в лёгком режиме выбор лепестка — мгновенно, без анимации
+    private static void Animate(IAnimatable target, DependencyProperty property, double to)
+    {
+        if (Perf.Lite) { Stop(target, property, to); return; }
+        target.BeginAnimation(property, new DoubleAnimation(to, Ms(130)) { EasingFunction = SelectEase });
+    }
+
+    private static IEasingFunction Frozen(CubicEase ease) { ease.Freeze(); return ease; }
 
     private static void Stop(IAnimatable target, DependencyProperty property, double value)
     {
@@ -507,7 +577,7 @@ public partial class WheelWindow : Window
         ((DependencyObject)target).SetValue(property, value);
     }
 
-    private static Duration Ms(int ms) => new(TimeSpan.FromMilliseconds(ms));
+    private static Duration Ms(int ms) => Perf.Ms(ms);
 
     private static Brush Frozen(Brush brush) { brush.Freeze(); return brush; }
 }

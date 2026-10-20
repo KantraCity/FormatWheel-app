@@ -76,15 +76,19 @@ internal sealed class WheelController
         _ctrl && _alt ? WheelSlot.CtrlAlt : _ctrl ? WheelSlot.Ctrl : _alt ? WheelSlot.Alt : WheelSlot.Primary;
 
     // Модификатор нажали/отпустили при открытом колесе — перескакиваем на другой слот, но не сразу.
-    // Ctrl+Alt+Shift физически невозможно отпустить одновременно: Ctrl или Alt отпускаются на пару
-    // десятков мс раньше Shift, и колесо успевало переключить меню — выбиралось не то.
-    // Поэтому отпускание ждёт SlotReleaseDelay: если за это время отпустят и Shift, берём выбор
-    // из меню, которое человек видел. Нажатие ждёт совсем чуть-чуть, чтобы Ctrl+Alt, нажатые
-    // не идеально вместе, не мелькали промежуточным меню Ctrl.
+    // Нажатие ждёт совсем чуть-чуть, чтобы Ctrl+Alt, нажатые не идеально вместе, не мелькали меню Ctrl.
+    // Отпускание — осторожнее: люди отпускают Ctrl/Alt заметно раньше Shift (иногда на полсекунды),
+    // и колесо успевало вернуться в меню Shift — выбирался лепесток другого меню в том же месте.
+    // Поэтому после отпускания меню меняется, только если Shift продолжают держать (SlotReleaseHold)
+    // или мышь сдвинули — то есть человек явно хочет в другое меню, а не просто отпускает всё.
     private static readonly TimeSpan SlotPressDelay = TimeSpan.FromMilliseconds(60);
-    private static readonly TimeSpan SlotReleaseDelay = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan SlotReleaseHold = TimeSpan.FromMilliseconds(600);
+    private const int SlotReleaseMovePx = 24;
     private DispatcherTimer? _slotDelay;
     private WheelSlot _pendingSlot;
+    private bool _pendingRelease;
+    private DateTime _pendingSince;
+    private Native.POINT _pendingCursor;
 
     private void OnModifier()
     {
@@ -101,18 +105,33 @@ internal sealed class WheelController
 
         if (_slotDelay == null)
         {
-            _slotDelay = new DispatcherTimer();
-            _slotDelay.Tick += (_, _) =>
-            {
-                _slotDelay.Stop();
-                if (_state is State.Visible or State.OwnDragWheel && _pendingSlot != _slot)
-                    Safe(ShowSlotAsync(_pendingSlot), "switch slot");
-            };
+            _slotDelay = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) };
+            _slotDelay.Tick += (_, _) => OnSlotDelayTick();
         }
-        bool releasing = Mods(slot) < Mods(_slot);
         _pendingSlot = slot;
-        _slotDelay.Interval = releasing ? SlotReleaseDelay : SlotPressDelay;
+        _pendingRelease = Mods(slot) < Mods(_slot);
+        _pendingSince = DateTime.UtcNow;
+        Native.GetCursorPos(out _pendingCursor);
         _slotDelay.Start();
+    }
+
+    private void OnSlotDelayTick()
+    {
+        if (_state is not (State.Visible or State.OwnDragWheel) || _pendingSlot == _slot) { _slotDelay!.Stop(); return; }
+
+        var waited = DateTime.UtcNow - _pendingSince;
+        bool go;
+        if (!_pendingRelease) go = waited >= SlotPressDelay;
+        else
+        {
+            Native.GetCursorPos(out var p);
+            int dx = p.X - _pendingCursor.X, dy = p.Y - _pendingCursor.Y;
+            go = waited >= SlotReleaseHold || dx * dx + dy * dy > SlotReleaseMovePx * SlotReleaseMovePx;
+        }
+        if (!go) return;
+
+        _slotDelay!.Stop();
+        Safe(ShowSlotAsync(_pendingSlot), "switch slot");
     }
 
     private static int Mods(WheelSlot slot) => slot switch { WheelSlot.CtrlAlt => 2, WheelSlot.Primary => 0, _ => 1 };
@@ -312,9 +331,11 @@ internal sealed class WheelController
 
         _wheel.MakeInputTransparent();
         Native.GetCursorPos(out var cursor);
-        bool slow = _converter!.IsSlow;
-        // для долгих конвертаций файл «появляется» у получателя только когда готов (кольцо позеленело)
-        _pendingData = new DataObject(new LazyFileDataObject(WaitForResult, () => !slow || _conversion?.IsCompleted == true));
+        // Файл «появляется» у получателя только когда готов — для всех конвертеров, не только долгих.
+        // Раньше для картинок получатель, спросив файл при старте драга, вешал UI-поток до конца конвертации:
+        // на слабом ПК с большой картинкой это и был лаг при отпускании. Теперь UI никогда не ждёт,
+        // а когда файл дозреет, PokeDropTarget заставит получателя переспросить.
+        _pendingData = new DataObject(new LazyFileDataObject(WaitForResult, () => _conversion?.IsCompleted == true));
         _trap.ArmAt(cursor);
         await Task.Delay(20);
         _state = State.AwaitGrab;
@@ -354,8 +375,28 @@ internal sealed class WheelController
             if (_conversionCts == cts) _conversionCts = null;
             cts.Dispose();
             _ghost.SetDone(session, t.Status == TaskStatus.RanToCompletion);
+            // конвертация дозрела, пока файл ещё тащат — пусть получатель переспросит
+            if (t.Status == TaskStatus.RanToCompletion && _state == State.OwnDrag && _conversion == conversion)
+                PokeDropTarget();
         }, TaskScheduler.FromCurrentSynchronizationContext());
         _conversion = conversion;
+    }
+
+    // Получатель (Проводник, Telegram, браузер) спрашивает «есть ли файл?» один раз — когда курсор
+    // входит в его окно. У долгой конвертации в этот момент файла ещё нет, и ответ «нет» запоминается
+    // до конца драга: бросок отклонялся, даже если файл давно готов. Подсовываем под курсор на миг своё
+    // невидимое окно (оно не принимает драг) и сдвигаем курсор на пиксель: OLE видит, что курсор
+    // ушёл из окна получателя и вернулся, и получатель заново проверяет данные — теперь файл есть.
+    private async void PokeDropTarget()
+    {
+        Native.GetCursorPos(out var p);
+        _trap.ShowAt(p);
+        Native.SetCursorPos(p.X + 1, p.Y);
+        await Task.Delay(60);
+        _trap.Disarm();
+        Native.GetCursorPos(out var now);
+        Native.SetCursorPos(now.X == p.X + 1 ? p.X : now.X, now.Y); // если человек сам не сдвинул мышь — вернём
+        Log.Write("Result ready mid-drag, asked the drop target to look again");
     }
 
     private void OnGrabbed()
@@ -386,7 +427,9 @@ internal sealed class WheelController
             {
                 // Долгую конвертацию бросили раньше, чем файл был готов (или получатель запомнил «файлов нет»
                 // ещё при входе курсора). Не выкидываем работу: доделаем и положим файл сами.
-                if (slow && !escaped && _conversion is { } pending)
+                // Быструю (картинку) доделываем, только если бросили раньше, чем она успела, —
+                // готовую и всё равно отклонённую бросили туда, где файлы не принимают.
+                if (!escaped && _conversion is { } pending && (slow || !pending.IsCompleted))
                     DeliverLater(pending, ShellTarget.FolderAt(dropPoint), originals);
                 else
                     CancelConversion(); // никуда не бросили — незачем доделывать
