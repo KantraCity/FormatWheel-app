@@ -103,6 +103,7 @@ public partial class App : Application
 
     private void FillExtensionsMenu(System.Windows.Forms.ToolStripMenuItem root)
     {
+        foreach (var old in root.DropDownItems.Cast<System.Windows.Forms.ToolStripItem>().ToArray()) old.Dispose();
         root.DropDownItems.Clear();
         if (_extensions.Count == 0)
             root.DropDownItems.Add(new System.Windows.Forms.ToolStripMenuItem(Loc.S.NoExtensions) { Enabled = false });
