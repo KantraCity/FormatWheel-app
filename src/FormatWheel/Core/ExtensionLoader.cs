@@ -18,6 +18,10 @@ internal sealed record ExtensionInfo(string Dll, string Name, IConverter? Conver
 // запускаются только после подтверждения: это чужой код в нашем процессе.
 internal static class ExtensionLoader
 {
+    // AssemblyLoadContext не выгружается, поэтому при «Перезагрузить расширения» уже загруженную DLL
+    // (тот же путь, тот же хэш) не грузим заново, а отдаём её конвертеры
+    private static readonly Dictionary<string, (string Hash, List<IConverter> Converters)> Loaded = new(StringComparer.OrdinalIgnoreCase);
+
     // askTrust(имя, dll) — спросить человека, можно ли запускать это расширение
     public static List<ExtensionInfo> LoadAll(Func<string, string, bool> askTrust)
     {
@@ -50,9 +54,9 @@ internal static class ExtensionLoader
 
     private static IEnumerable<ExtensionInfo> LoadFile(string dll, bool trusted, Func<string, string, bool> askTrust)
     {
+        string hash = Sha256File(dll);
         if (!trusted)
         {
-            string hash = Sha256File(dll);
             if (!TrustStore.IsTrusted(dll, hash))
             {
                 if (!askTrust(Path.GetFileNameWithoutExtension(dll), dll))
@@ -62,6 +66,14 @@ internal static class ExtensionLoader
                 }
                 TrustStore.Trust(dll, hash);
             }
+        }
+
+        string fullPath = Path.GetFullPath(dll);
+        if (Loaded.TryGetValue(fullPath, out var cached) && cached.Hash == hash)
+        {
+            foreach (var c in cached.Converters)
+                yield return new(dll, c.Name, c, null);
+            yield break;
         }
 
         List<IConverter> converters = new();
@@ -75,7 +87,7 @@ internal static class ExtensionLoader
                 string candidate = Path.Combine(Path.GetDirectoryName(dll)!, name.Name + ".dll");
                 return File.Exists(candidate) ? ctx.LoadFromAssemblyPath(candidate) : null;
             };
-            var assembly = context.LoadFromAssemblyPath(Path.GetFullPath(dll));
+            var assembly = context.LoadFromAssemblyPath(fullPath);
 
             foreach (var type in assembly.GetTypes().Where(t => typeof(IConverter).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface))
             {
@@ -83,6 +95,7 @@ internal static class ExtensionLoader
                     converters.Add(converter);
             }
             if (converters.Count == 0) error = "no IConverter found";
+            else Loaded[fullPath] = (hash, converters);
         }
         catch (Exception ex)
         {

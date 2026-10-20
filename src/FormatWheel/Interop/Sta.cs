@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 
 namespace FormatWheel;
 
@@ -14,6 +15,9 @@ internal static class Sta
         {
             try { tcs.SetResult(func()); }
             catch (Exception ex) { tcs.SetException(ex); }
+            // WPF-картинки заводят на потоке свой Dispatcher со скрытым окном. Поток просто так завершится —
+            // окно снесёт система, но GCHandle на него не освободится, и Dispatcher останется в памяти навсегда.
+            finally { Dispatcher.FromThread(Thread.CurrentThread)?.InvokeShutdown(); }
         })
         { IsBackground = true, Name = "FormatWheel STA" };
         thread.SetApartmentState(ApartmentState.STA);
