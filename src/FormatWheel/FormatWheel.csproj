@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- WinForms только ради иконки в трее -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- implicit usings тянут сразу WPF и WinForms — начинаются конфликты имён -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>FormatWheel</RootNamespace>
+    <AssemblyName>FormatWheel</AssemblyName>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
+
+    <Version>1.0.0</Version>
+    <Product>Format Wheel</Product>
+    <Description>Convert files on the fly while dragging them</Description>
+    <SatelliteResourceLanguages>ru;en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FormatWheel.Sdk\FormatWheel.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="14.*" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,71 @@
+namespace FormatWheel;
+
+internal sealed partial class Strings
+{
+    public static Strings En => new()
+    {
+        TrayAutostart = "Start with Windows",
+        TrayOpenFolder = "Open converted files",
+        TrayOpenLog = "Open log",
+        TrayExit = "Exit",
+        TrayExtensions = "Extensions",
+        TrayOpenExtensions = "Open extensions folder",
+        TrayReloadExtensions = "Reload extensions",
+        NoExtensions = "No extensions installed",
+        ExtensionsReloaded = n => $"Extensions loaded: {n}",
+
+        AlreadyRunning = "Format Wheel is already running — look for the icon in the tray.",
+        EngineLoadFailed = "Couldn't load the conversion engine:",
+        ElevatedTitle = "Running as administrator",
+        ElevatedText = "Windows blocks drag and drop from a regular Explorer into elevated apps. Please restart without admin rights.",
+        RunningTitle = "Format Wheel is running",
+        RunningText = "Drag a file and hold Shift. Add Ctrl or Alt for more menus. Release Shift on the one you want.",
+        HeicMissingText = "To save HEIC, install \"HEIF Image Extensions\" and \"HEVC Video Extensions\" from the Microsoft Store, then restart the app.",
+        AutostartFailed = "Couldn't change autostart",
+        ErrorTitle = "Format Wheel: error",
+        ConvertFailedTitle = "Conversion failed",
+        OriginalDragged = "The original file was dropped instead.",
+        GrabFailed = "Couldn't take over the drag. See the log (tray menu) for details.",
+        SavedTitle = "File is ready",
+        SavedIn = path => $"Saved: {path}",
+
+        PickOne = "pick one",
+        EmptySlot = "nothing here",
+        SizeUnknown = "couldn't read the size",
+        TooSmall = dims => $"{dims} — nothing to shrink",
+        FileCount = n => n == 1 ? "1 file" : $"{n} files",
+
+        Converting = "Converting...",
+        Done = "Done",
+        Failed = "Error",
+
+        SizeSlot = "Size",
+        Original = "Original",
+        Unchanged = "unchanged",
+        LongSide = "long side",
+        EachFile = "of each file",
+        OwnRatio = "custom ratio",
+        MixedRatios = "mixed ratios",
+        RatioOf = ratio => $"ratio {ratio}",
+        Megapixels = mp => $"{mp} MP",
+        SizeLarge = "large",
+        SizeMedium = "medium",
+        SizeAvatar = "avatar",
+        SizeIcon = "icon",
+        SizeEmail = "for email",
+        SizePreview = "preview",
+        SizeWeb = "for the web",
+        SizePrint = "4x6in print",
+
+        HintJpg = "universal",
+        HintPng = "transparency",
+        HintHeic = "iPhone",
+        HintWebp = "for the web",
+        HintAvif = "tiny size",
+        HintJxl = "next-gen",
+        HintTiff = "print",
+        HintGif = "animation",
+        HintBmp = "uncompressed",
+        HintIco = "icon",
+    };
+}
