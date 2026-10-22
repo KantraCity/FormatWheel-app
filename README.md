@@ -1,6 +1,6 @@
 # Format Wheel — приложение
 
-Код программы Format Wheel (версия 1.0.5) и SDK для расширений. Общее описание и список расширений — в [главном репозитории](https://github.com/KantraCity/FormatWheel).
+Код программы Format Wheel (версия 1.0.6) и SDK для расширений. Общее описание и список расширений — в [главном репозитории](https://github.com/KantraCity/FormatWheel).
 
 Требования: Windows 10 (1809) или 11, x64. Установщик ставит программу для текущего пользователя в `%LOCALAPPDATA%\Programs\FormatWheel`, права администратора не нужны.
 
