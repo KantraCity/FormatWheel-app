@@ -65,6 +65,8 @@ public partial class App : Application
         try { _hook.Start(); }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Format Wheel"); Shutdown(); return; }
 
+        _tips = new DragTips(() => _controller.IsIdle, ShowTip);
+
         if (IsElevated()) Notify(Loc.S.ElevatedTitle, Loc.S.ElevatedText);
         else if (Formats.HeicHidden) Notify(Loc.S.RunningTitle, Loc.S.HeicMissingText);
         else Notify(Loc.S.RunningTitle, Loc.S.RunningText);
@@ -114,6 +116,8 @@ public partial class App : Application
         menu.Items.Add(Loc.S.TrayExit, null, (_, _) => Shutdown());
 
         _tray = new System.Windows.Forms.NotifyIcon { Icon = LoadAppIcon(), Text = "Format Wheel", Visible = true, ContextMenuStrip = menu };
+        _tray.BalloonTipClicked += (_, _) => OnBalloonClicked();
+        _tray.BalloonTipClosed += (_, _) => _tipOnScreen = false;
     }
 
     private void FillExtensionsMenu(System.Windows.Forms.ToolStripMenuItem root)
@@ -147,7 +151,30 @@ public partial class App : Application
         return System.Drawing.SystemIcons.Application;
     }
 
-    private void Notify(string title, string text) => _tray?.ShowBalloonTip(3000, title, text, System.Windows.Forms.ToolTipIcon.Info);
+    private void Notify(string title, string text)
+    {
+        _tipOnScreen = false;
+        _tray?.ShowBalloonTip(3000, title, text, System.Windows.Forms.ToolTipIcon.Info);
+    }
+
+    // Напоминалка во время драга. У трея одно облачко на всех, поэтому помним, что сейчас на экране именно она:
+    // клик по ней выключает напоминалки навсегда, а клик по обычному уведомлению — нет.
+    private DragTips? _tips;
+    private bool _tipOnScreen;
+
+    private void ShowTip(string title, string text)
+    {
+        _tray?.ShowBalloonTip(4000, title, text, System.Windows.Forms.ToolTipIcon.None);
+        _tipOnScreen = true;
+    }
+
+    private void OnBalloonClicked()
+    {
+        if (!_tipOnScreen) return;
+        _tipOnScreen = false;
+        _tips?.TurnOff();
+        Notify(Loc.S.DragTipsOffTitle, Loc.S.DragTipsOffText);
+    }
 
     // из-под админа драг из обычного Проводника не работает (UIPI), предупреждаем
     private static bool IsElevated()

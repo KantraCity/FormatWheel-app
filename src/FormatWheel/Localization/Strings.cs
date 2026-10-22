@@ -31,6 +31,12 @@ internal sealed partial class Strings
     public required string SavedTitle { get; init; }
     public required Func<string, string> SavedIn { get; init; }
 
+    // напоминалки во время обычного драга (DragTips): заголовок — случайная фраза
+    public required string[] DragTips { get; init; }
+    public required string DragTipText { get; init; }
+    public required string DragTipsOffTitle { get; init; }
+    public required string DragTipsOffText { get; init; }
+
     public required string PickOne { get; init; }
     public required string EmptySlot { get; init; }
     public required string SizeUnknown { get; init; }

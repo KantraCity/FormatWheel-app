@@ -61,6 +61,9 @@ internal sealed class WheelController
         };
     }
 
+    // колесо закрыто и своего драга нет
+    public bool IsIdle => _state == State.Idle;
+
     // ---------- клавиши ----------
 
     public void OnShift(bool down)

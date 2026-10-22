@@ -29,6 +29,21 @@ internal sealed partial class Strings
         SavedTitle = "File is ready",
         SavedIn = path => $"Saved: {path}",
 
+        DragTips = new[]
+        {
+            "Psst, I'm here 👋",
+            "You know how to call me",
+            "Need it in another format?",
+            "Wrong format? I'm around",
+            "The wheel is ready",
+            "I see what you're dragging 👀",
+            "Just saying: I'm here",
+            "Hold Shift and I'll spin it",
+        },
+        DragTipText = "Hold Shift while dragging. Click this message and I'll stop reminding you.",
+        DragTipsOffTitle = "Okay, I'll be quiet 🤐",
+        DragTipsOffText = "No more reminders. The wheel still opens with Shift.",
+
         PickOne = "pick one",
         EmptySlot = "nothing here",
         SizeUnknown = "couldn't read the size",
