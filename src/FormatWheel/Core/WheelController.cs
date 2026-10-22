@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -390,10 +391,16 @@ internal sealed class WheelController
     // до конца драга: бросок отклонялся, даже если файл давно готов. Подсовываем под курсор на миг своё
     // невидимое окно (оно не принимает драг) и сдвигаем курсор на пиксель: OLE видит, что курсор
     // ушёл из окна получателя и вернулся, и получатель заново проверяет данные — теперь файл есть.
+    // Окно сначала должно отрисоваться: прозрачное окно WPF до первой отрисовки мышь не ловит,
+    // курсор «проходил» сквозь него, и получатель так и не переспрашивал.
     private async void PokeDropTarget()
     {
         Native.GetCursorPos(out var p);
         _trap.ShowAt(p);
+        await Task.Delay(40);
+        if (_state != State.OwnDrag) { _trap.Disarm(); return; } // пока ждали, файл уже бросили
+        Native.GetCursorPos(out p);
+        _trap.ShowAt(p); // человек мог сдвинуть мышь, пока ждали
         Native.SetCursorPos(p.X + 1, p.Y);
         await Task.Delay(60);
         _trap.Disarm();
@@ -402,7 +409,13 @@ internal sealed class WheelController
         Log.Write("Result ready mid-drag, asked the drop target to look again");
     }
 
-    private void OnGrabbed()
+    // Свой драг можно начать, только когда драг Проводника полностью закончился: Windows не даёт два сразу
+    // («Перетаскивание уже выполняется»). Обычно Проводник выходит из своего цикла за ~60 мс после Esc,
+    // но с рабочего стола и на другом мониторе бывает и 300 мс — тогда немного подождём и попробуем снова.
+    private const int DragStartAttempts = 25;
+    private static readonly TimeSpan DragStartRetry = TimeSpan.FromMilliseconds(40);
+
+    private async void OnGrabbed()
     {
         if (_state != State.AwaitGrab || _pendingData == null) return;
 
@@ -424,16 +437,27 @@ internal sealed class WheelController
         _trap.QueryContinueDrag += follow;
         try
         {
-            var effect = DragDrop.DoDragDrop(_trap, data, DragDropEffects.Copy);
+            DragDropEffects effect;
+            for (int attempt = 1; ; attempt++)
+            {
+                try { effect = DragDrop.DoDragDrop(_trap, data, DragDropEffects.Copy); break; }
+                catch (COMException ex) when (attempt < DragStartAttempts && Native.PrimaryButtonDown())
+                {
+                    if (attempt == 1) Log.Write("Explorer drag still running, waiting: " + ex.Message);
+                    await Task.Delay(DragStartRetry);
+                }
+            }
             Log.Write("Own drag finished: " + effect);
             if (effect == DragDropEffects.None)
             {
                 // Долгую конвертацию бросили раньше, чем файл был готов (или получатель запомнил «файлов нет»
                 // ещё при входе курсора). Не выкидываем работу: доделаем и положим файл сами.
-                // Быструю (картинку) доделываем, только если бросили раньше, чем она успела, —
-                // готовую и всё равно отклонённую бросили туда, где файлы не принимают.
-                if (!escaped && _conversion is { } pending && (slow || !pending.IsCompleted))
-                    DeliverLater(pending, ShellTarget.FolderAt(dropPoint), originals);
+                // Быструю (картинку) доделываем, если бросили раньше, чем она успела, или если бросили в папку:
+                // Проводник мог так и не переспросить данные после готовности. Готовую и отклонённую не в папке
+                // бросили туда, где файлы не принимают.
+                string? folder = escaped ? null : ShellTarget.FolderAt(dropPoint);
+                if (!escaped && _conversion is { } pending && (slow || !pending.IsCompleted || folder != null))
+                    DeliverLater(pending, folder, originals);
                 else
                     CancelConversion(); // никуда не бросили — незачем доделывать
             }
@@ -483,7 +507,8 @@ internal sealed class WheelController
         // конвертация теперь сама по себе: следующий драг не должен её заглушить
         _conversionCts = null;
         _conversion = null;
-        Log.Write("Dropped before the result was ready, will save to " + (folder ?? "the source folder"));
+        Log.Write((conversion.IsCompleted ? "Drop refused, " : "Dropped before the result was ready, ")
+            + "will save to " + (folder ?? "the source folder"));
         try
         {
             string[] results = await conversion;
