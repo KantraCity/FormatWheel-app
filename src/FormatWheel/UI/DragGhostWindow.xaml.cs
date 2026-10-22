@@ -44,8 +44,25 @@ public partial class DragGhostWindow : Window
         _follow.Tick += (_, _) => { if (Following) MoveToCursor(); };
     }
 
+    // На больших мониторах (2K и выше при масштабе 100%) карточка в 136 точек выглядела крошечной:
+    // растим её с высотой экрана под курсором — от 1080p как есть, максимум в полтора раза.
+    private const double DesignHeight = 210, BaseScreenHeight = 1040, MaxScale = 1.5;
+
+    private void ScaleToScreen()
+    {
+        Native.GetCursorPos(out var cursor);
+        var area = Native.WorkAreaAt(cursor);
+        double dpi = VisualTreeHelper.GetDpi(this).DpiScaleY;
+        double s = Math.Clamp((area.Bottom - area.Top) / dpi / BaseScreenHeight, 1, MaxScale);
+        if (Root.LayoutTransform is ScaleTransform current && Math.Abs(current.ScaleX - s) < 0.01) return;
+        Root.LayoutTransform = new ScaleTransform(s, s);
+        Width = DesignWidth * s;
+        Height = DesignHeight * s;
+    }
+
     public int Begin(BitmapSource? thumbnail, string badge, int fileCount)
     {
+        ScaleToScreen();
         int session = ResetState(badge);
         Root.BeginAnimation(OpacityProperty, null);
         Root.Opacity = 0;

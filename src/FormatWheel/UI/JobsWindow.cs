@@ -81,9 +81,15 @@ internal sealed class JobsWindow : Window
     }
 
     // files — что конвертируем, folder — куда положим готовое, cancel — остановить конвертацию (крестик)
-    public Card Add(string[] files, string folder, JobProgress progress, Action? cancel)
+    public Card Add(string[] files, string folder, JobProgress progress, Action? cancel) =>
+        Show(new Card(this, files, null, folder, progress, cancel));
+
+    // действие из расширения (печать и т.п.): ничего не сохраняем, action — что делаем
+    public Card AddAction(string[] files, string action, JobProgress progress, Action? cancel) =>
+        Show(new Card(this, files, action, null, progress, cancel));
+
+    private Card Show(Card card)
     {
-        var card = new Card(this, files, folder, progress, cancel);
         _cards.Children.Add(card.Root);
         if (!IsVisible) Show();
         Place();
@@ -163,7 +169,7 @@ internal sealed class JobsWindow : Window
     internal sealed class Card
     {
         private readonly JobsWindow _owner;
-        private readonly string _folder;
+        private readonly string? _folder; // null — действие, файл никуда не сохраняется
         private readonly JobProgress _progress;
         private readonly ScaleTransform _fill = new(0, 1);
         private readonly Rectangle _bar;
@@ -174,7 +180,7 @@ internal sealed class JobsWindow : Window
 
         public Border Root { get; }
 
-        public Card(JobsWindow owner, string[] files, string folder, JobProgress progress, Action? cancel)
+        public Card(JobsWindow owner, string[] files, string? action, string? folder, JobProgress progress, Action? cancel)
         {
             _owner = owner;
             _folder = folder;
@@ -184,7 +190,7 @@ internal sealed class JobsWindow : Window
             // крестик — только под мышью, вторая строка — только для текста ошибки
             var title = new TextBlock
             {
-                Text = files.Length == 1 ? Path.GetFileName(files[0]) : Loc.S.FileCount(files.Length),
+                Text = (action != null ? action + " · " : "") + (files.Length == 1 ? Path.GetFileName(files[0]) : Loc.S.FileCount(files.Length)),
                 Foreground = Brushes.White, FontSize = 12.5, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis
             };
             _percent = new TextBlock { Foreground = Dim, FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
@@ -250,7 +256,7 @@ internal sealed class JobsWindow : Window
             Root = new Border
             {
                 Margin = new Thickness(0, 4, 0, 0), Padding = new Thickness(10, 7, 10, 8), CornerRadius = new CornerRadius(10),
-                Child = body, Cursor = Cursors.Arrow, Opacity = 0, ToolTip = Loc.S.JobSavingTo(FolderName(folder)),
+                Child = body, Cursor = Cursors.Arrow, Opacity = 0, ToolTip = folder != null ? Loc.S.JobSavingTo(FolderName(folder)) : action,
                 Background = Frozen(new SolidColorBrush(Color.FromArgb(0x99, 0x10, 0x12, 0x18)))
             };
             Root.MouseEnter += (_, _) => { if (!_finished && !_cancelled && cancel != null) _cancel.Visibility = Visibility.Visible; };
@@ -272,12 +278,20 @@ internal sealed class JobsWindow : Window
             _percent.Text = $"{(int)Math.Round(value * 100)}%";
         }
 
+        // действие выполнено
+        public void Done()
+        {
+            Finish(DoneBrush, "✓");
+            Root.ToolTip = null;
+            Linger(DoneLinger);
+        }
+
         public void Done(string[] saved)
         {
             Finish(DoneBrush, "✓");
             _saved = saved;
             Root.Cursor = Cursors.Hand;
-            Root.ToolTip = Loc.S.JobSavedIn(FolderName(_folder));
+            Root.ToolTip = Loc.S.JobSavedIn(FolderName(_folder!));
             Linger(DoneLinger);
         }
 
@@ -331,7 +345,7 @@ internal sealed class JobsWindow : Window
             try
             {
                 if (_saved.Length == 1) Process.Start("explorer.exe", $"/select,\"{_saved[0]}\"");
-                else Process.Start("explorer.exe", $"\"{_folder}\"");
+                else if (_folder != null) Process.Start("explorer.exe", $"\"{_folder}\"");
             }
             catch (Exception ex) { Log.Write("Open saved file: " + ex.Message); }
         }

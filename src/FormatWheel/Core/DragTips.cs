@@ -69,7 +69,7 @@ internal sealed class DragTips
             var read = Sta.RunAsync(() => ShellTarget.SelectedFiles(source));
             if (await Task.WhenAny(read, Task.Delay(ReadTimeout)) != read) { Log.Write("Explorer drag: selection read timed out"); return; }
             string[]? files = read.Result;
-            if (files == null || Converters.For(files) == null)
+            if (files == null || (Converters.For(files) == null && !Converters.HasActionsFor(files)))
             {
                 Log.Write("Explorer drag, no tip: " + (files == null ? "no selected files" : "not convertible: " + string.Join(" | ", Array.ConvertAll(files, Path.GetFileName))));
                 return;

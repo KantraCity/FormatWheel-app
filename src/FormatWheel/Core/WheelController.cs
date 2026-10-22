@@ -178,16 +178,17 @@ internal sealed class WheelController
         if (_files != null && files.SequenceEqual(_files)) return;
 
         var converter = Converters.For(files);
-        if (converter == null)
+        if (converter == null && !Converters.HasActionsFor(files))
         {
-            // никакой конвертер не берёт эти файлы (папка, неизвестный тип) — колеса нет, драг как обычно
+            // никто не берёт эти файлы (папка, неизвестный тип) — колеса нет, драг как обычно
             Cancel("no converter for: " + string.Join(" | ", files.Select(Path.GetFileName)));
             return;
         }
 
+        // конвертера может не быть: тогда на колесе только действия расширений (печать и т.п.)
         _converter = converter;
         _files = files;
-        Log.Write($"Files over wheel ({converter.Name}): " + string.Join(" | ", files));
+        Log.Write($"Files over wheel ({converter?.Name ?? "actions only"}): " + string.Join(" | ", files));
         Safe(LoadThumbnailAsync(files[0]), "thumbnail");
         Safe(RevealAsync(files), "reveal");
     }
@@ -216,10 +217,12 @@ internal sealed class WheelController
     {
         _slot = slot;
         var files = _state == State.OwnDragWheel ? _dragFiles : _files;
-        if (_converter == null || files == null) return;
+        if (files == null || (_converter == null && _state == State.OwnDragWheel)) return;
+        // во время своего драга файл уже сконвертирован и тащится — действия там не к месту
+        bool withActions = _state != State.OwnDragWheel;
 
-        if (_menus == null || _menus.Files != files || _menus.Converter != _converter)
-            _menus = new MenuCache(_converter, files, new());
+        if (_menus == null || _menus.Files != files || _menus.Converter != _converter || _menus.WithActions != withActions)
+            _menus = new MenuCache(_converter, files, withActions, new());
         var cache = _menus;
 
         // MenuFor может читать файлы (размер картинки), поэтому и меню, и число слотов — не в UI-потоке
@@ -237,11 +240,21 @@ internal sealed class WheelController
     private IReadOnlyList<WheelOption> _slotOptions = Array.Empty<WheelOption>();
 
     // меню слотов на текущие файлы считаем один раз за драг, а не на каждое переключение Ctrl/Alt
-    private sealed record MenuCache(IConverter Converter, string[] Files, ConcurrentDictionary<WheelSlot, IReadOnlyList<WheelOption>> Menus);
+    private sealed record MenuCache(IConverter? Converter, string[] Files, bool WithActions, ConcurrentDictionary<WheelSlot, IReadOnlyList<WheelOption>> Menus);
     private MenuCache? _menus;
 
+    // ось-метка лепестков-действий: их значение — сам WheelAction, в рецепт они не попадают
+    private const string ActionAxis = "formatwheel.action";
+
+    // форматы конвертера, а в основном меню после них — действия расширений
     private static IReadOnlyList<WheelOption> Menu(MenuCache cache, WheelSlot slot) =>
-        cache.Menus.GetOrAdd(slot, s => cache.Converter.MenuFor(s, cache.Files).ToList());
+        cache.Menus.GetOrAdd(slot, s =>
+        {
+            var options = cache.Converter?.MenuFor(s, cache.Files).ToList() ?? new List<WheelOption>();
+            if (s == WheelSlot.Primary && cache.WithActions)
+                options.AddRange(Converters.ActionsFor(cache.Files).Select(a => new WheelOption(ActionAxis, a, a.Label, a.Hint, a.Icon)));
+            return options;
+        });
 
     // к каким меню ведут Ctrl и Alt — их подписи показываем на колесе
     private static (bool Ctrl, bool Alt) AvailableKeys(MenuCache cache)
@@ -285,9 +298,19 @@ internal sealed class WheelController
             }
 
             int index = _wheel.SelectedIndex;
-            if (index < 0 || index >= _slotOptions.Count || _files == null || _converter == null || !Native.PrimaryButtonDown())
+            if (index < 0 || index >= _slotOptions.Count || _files == null || !Native.PrimaryButtonDown())
             {
                 Cancel($"Shift released with no choice (petal {index})");
+                return;
+            }
+            if (_slotOptions[index].Value is WheelAction action)
+            {
+                await RunActionAsync(_files, action);
+                return;
+            }
+            if (_converter == null)
+            {
+                Cancel("no converter for the chosen petal");
                 return;
             }
 
@@ -314,6 +337,47 @@ internal sealed class WheelController
         if (updated.Equals(_recipe)) return;
         Log.Write("Recipe changed mid-drag");
         StartConversion(_dragFiles, updated, labels, restart: true);
+    }
+
+    // Действие расширения (печать и т.п.): файл никуда не тащим — отменяем драг Проводника, чтобы оригинал
+    // не уехал туда, где отпустят мышь, и выполняем действие в фоне с карточкой у трея.
+    private async Task RunActionAsync(string[] files, WheelAction action)
+    {
+        _state = State.Handoff;
+        _watch.Stop();
+        _wheel.CloseAnimated(inputTransparentNow: false); // ещё ловит DragLeave — по нему узнаем об отмене Проводника
+        _leaveSignal = false;
+        Native.SendEscape();
+        var wait = Stopwatch.StartNew();
+        while (!_leaveSignal && wait.ElapsedMilliseconds < 250) await Task.Delay(10);
+        _wheel.MakeInputTransparent();
+        _state = State.Idle;
+        _files = null;
+        _converter = null;
+        Log.Write($"Action «{action.Label}»: " + string.Join(" | ", files));
+
+        var progress = new JobProgress();
+        var cts = new CancellationTokenSource();
+        var card = _jobs.AddAction(files, action.Label, progress, () =>
+        {
+            Log.Write($"Action «{action.Label}» cancelled from the tray panel");
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        });
+        IProgress<double> report = new Progress<double>(progress.Report); // из STA-потока — в UI
+        try
+        {
+            // отдельный STA-поток: действие может показывать окна (диалог печати)
+            await Sta.RunAsync(() => { action.Run(files, report.Report, cts.Token).GetAwaiter().GetResult(); return true; });
+            Log.Write($"Action «{action.Label}» done");
+            card.Done();
+        }
+        catch (Exception) when (cts.IsCancellationRequested) { card.Remove(); }
+        catch (Exception ex)
+        {
+            Log.Write($"Action «{action.Label}» failed: " + ex);
+            card.Failed((ex is AggregateException agg ? agg.Flatten().InnerException ?? ex : ex).Message);
+        }
+        finally { cts.Dispose(); }
     }
 
     private async Task HandoffAsync(string[] files, Recipe recipe, IReadOnlyList<(string Axis, string Label)> labels)

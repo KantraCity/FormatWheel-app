@@ -87,7 +87,9 @@ public partial class App : Application
     private void LoadConverters()
     {
         _extensions = ExtensionLoader.LoadAll(AskTrust);
-        Converters.Set(new IConverter[] { new ImageConverter() }.Concat(_extensions.Where(x => x.Enabled).Select(x => x.Converter!)));
+        Converters.Set(
+            new IConverter[] { new ImageConverter() }.Concat(_extensions.Where(x => x.Converter != null).Select(x => x.Converter!)),
+            _extensions.Where(x => x.Actions != null).Select(x => x.Actions!));
     }
 
     private static bool AskTrust(string name, string dll) =>

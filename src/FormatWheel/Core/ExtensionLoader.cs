@@ -9,9 +9,13 @@ using FormatWheel.Sdk;
 
 namespace FormatWheel;
 
-internal sealed record ExtensionInfo(string Dll, string Name, IConverter? Converter, string? Problem)
+// Одно расширение (класс): конвертер, действия или и то и другое сразу
+internal sealed record ExtensionInfo(string Dll, string Name, IConverter? Converter, IWheelActions? Actions, string? Problem)
 {
-    public bool Enabled => Converter != null;
+    public bool Enabled => Converter != null || Actions != null;
+
+    public static ExtensionInfo From(string dll, object plugin) =>
+        new(dll, (plugin as IConverter)?.Name ?? ((IWheelActions)plugin).Name, plugin as IConverter, plugin as IWheelActions, null);
 }
 
 // Грузит расширения-DLL. Встроенные (рядом с exe) доверенные. Пользовательские (в AppData)
@@ -19,8 +23,8 @@ internal sealed record ExtensionInfo(string Dll, string Name, IConverter? Conver
 internal static class ExtensionLoader
 {
     // AssemblyLoadContext не выгружается, поэтому при «Перезагрузить расширения» уже загруженную DLL
-    // (тот же путь, тот же хэш) не грузим заново, а отдаём её конвертеры
-    private static readonly Dictionary<string, (string Hash, List<IConverter> Converters)> Loaded = new(StringComparer.OrdinalIgnoreCase);
+    // (тот же путь, тот же хэш) не грузим заново, а отдаём её конвертеры и действия
+    private static readonly Dictionary<string, (string Hash, List<object> Plugins)> Loaded = new(StringComparer.OrdinalIgnoreCase);
 
     // askTrust(имя, dll) — спросить человека, можно ли запускать это расширение
     public static List<ExtensionInfo> LoadAll(Func<string, string, bool> askTrust)
@@ -61,7 +65,7 @@ internal static class ExtensionLoader
             {
                 if (!askTrust(Path.GetFileNameWithoutExtension(dll), dll))
                 {
-                    yield return new(dll, Path.GetFileNameWithoutExtension(dll), null, "not allowed");
+                    yield return new(dll, Path.GetFileNameWithoutExtension(dll), null, null, "not allowed");
                     yield break;
                 }
                 TrustStore.Trust(dll, hash);
@@ -71,12 +75,12 @@ internal static class ExtensionLoader
         string fullPath = Path.GetFullPath(dll);
         if (Loaded.TryGetValue(fullPath, out var cached) && cached.Hash == hash)
         {
-            foreach (var c in cached.Converters)
-                yield return new(dll, c.Name, c, null);
+            foreach (var p in cached.Plugins)
+                yield return ExtensionInfo.From(dll, p);
             yield break;
         }
 
-        List<IConverter> converters = new();
+        List<object> plugins = new();
         string? error = null;
         try
         {
@@ -89,13 +93,15 @@ internal static class ExtensionLoader
             };
             var assembly = context.LoadFromAssemblyPath(fullPath);
 
-            foreach (var type in assembly.GetTypes().Where(t => typeof(IConverter).IsAssignableFrom(t) && !t.IsAbstract && !t.IsInterface))
+            // класс может быть конвертером, действиями или и тем и другим — создаём один экземпляр
+            foreach (var type in assembly.GetTypes().Where(t => !t.IsAbstract && !t.IsInterface
+                         && (typeof(IConverter).IsAssignableFrom(t) || typeof(IWheelActions).IsAssignableFrom(t))))
             {
-                if (Activator.CreateInstance(type) is IConverter converter)
-                    converters.Add(converter);
+                if (Activator.CreateInstance(type) is { } plugin)
+                    plugins.Add(plugin);
             }
-            if (converters.Count == 0) error = "no IConverter found";
-            else Loaded[fullPath] = (hash, converters);
+            if (plugins.Count == 0) error = "no IConverter or IWheelActions found";
+            else Loaded[fullPath] = (hash, plugins);
         }
         catch (Exception ex)
         {
@@ -103,10 +109,10 @@ internal static class ExtensionLoader
         }
 
         if (error != null)
-            yield return new(dll, Path.GetFileNameWithoutExtension(dll), null, error);
+            yield return new(dll, Path.GetFileNameWithoutExtension(dll), null, null, error);
         else
-            foreach (var c in converters)
-                yield return new(dll, c.Name, c, null);
+            foreach (var p in plugins)
+                yield return ExtensionInfo.From(dll, p);
     }
 
     private static string Sha256File(string path)
