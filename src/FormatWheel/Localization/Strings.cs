@@ -34,7 +34,6 @@ internal sealed partial class Strings
     public required Func<string, string> JobSavedIn { get; init; }
     public required string Desktop { get; init; }
     public required string JobCancel { get; init; }
-    public required string JobCancelling { get; init; }
 
     // напоминалки во время обычного драга (DragTips): заголовок — случайная фраза
     public required string[] DragTips { get; init; }

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -28,10 +29,21 @@ internal sealed class JobProgress
     }
 }
 
-// Панель у трея (правый нижний угол рабочей области): по карточке на каждую фоновую конвертацию.
+// Панель у трея: по карточке на каждую фоновую конвертацию. Пристраивается к своему значку в трее
+// (Windows сама говорит, где он; если значок спрятан — где кнопка «^»), с той стороны, где панель задач.
 internal sealed class JobsWindow : Window
 {
-    private const double CardWidth = 300, Gap = 12;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindow(string cls, string? title);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string? title);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    private const double CardWidth = 250, Gap = 10;
+    private const double ChevronWidth = 32; // кнопка «^» в Windows 11 — у начала области уведомлений
+
+    // где на экране значок программы в трее; задаёт App, потому что значок — его
+    public static Func<Native.RECT?>? TrayIconRect { get; set; }
+
+    private readonly IntPtr _hwnd;
     private static readonly TimeSpan DoneLinger = TimeSpan.FromSeconds(6), FailedLinger = TimeSpan.FromSeconds(15);
 
     private static readonly Brush Accent = Frozen(new LinearGradientBrush(new GradientStopCollection
@@ -60,11 +72,11 @@ internal sealed class JobsWindow : Window
         UseLayoutRounding = true;
         SizeToContent = SizeToContent.Height;
         Width = CardWidth;
-        FontFamily = new FontFamily("Segoe UI Variable Display, Segoe UI");
+        FontFamily = new FontFamily("Segoe UI");
         Content = _cards;
 
-        var hwnd = new WindowInteropHelper(this).EnsureHandle();
-        Native.SetExStyle(hwnd, add: Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW, remove: 0);
+        _hwnd = new WindowInteropHelper(this).EnsureHandle();
+        Native.SetExStyle(_hwnd, add: Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW, remove: 0);
         SizeChanged += (_, _) => Place();
     }
 
@@ -84,12 +96,66 @@ internal sealed class JobsWindow : Window
         if (_cards.Children.Count == 0) Hide();
     }
 
-    // рабочая область основного монитора уже без панели задач, в единицах WPF
+    // всё в пикселях экрана: панель задач и значки трея живут в них
     private void Place()
     {
-        var area = SystemParameters.WorkArea;
-        Left = area.Right - CardWidth - Gap;
-        Top = area.Bottom - ActualHeight - Gap;
+        double k = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        int w = (int)Math.Round(ActualWidth * k), h = (int)Math.Round(ActualHeight * k), gap = (int)Math.Round(Gap * k);
+        var (x, y) = NextToTray(w, h, gap) ?? Corner(w, h, gap);
+        Native.SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, Native.SWP_NOSIZE | Native.SWP_NOZORDER | Native.SWP_NOACTIVATE);
+    }
+
+    // по центру значка, вплотную к панели задач с её внутренней стороны; null — панель задач не нашлась
+    private static (int X, int Y)? NextToTray(int w, int h, int gap)
+    {
+        IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
+        if (taskbar == IntPtr.Zero || !Native.GetWindowRect(taskbar, out var bar)) return null;
+        var barCenter = new Native.POINT { X = (bar.Left + bar.Right) / 2, Y = (bar.Top + bar.Bottom) / 2 };
+        var work = Native.WorkAreaAt(barCenter);
+        bool horizontal = bar.Right - bar.Left > bar.Bottom - bar.Top;
+        if ((IconCenter(bar) ?? ChevronCenter(taskbar, horizontal)) is not { } a) return null;
+
+        int x, y;
+        if (horizontal)
+        {
+            x = a.X - w / 2;
+            y = barCenter.Y > (work.Top + work.Bottom) / 2 ? bar.Top - h - gap : bar.Bottom + gap; // снизу или сверху
+        }
+        else
+        {
+            y = a.Y - h / 2;
+            x = barCenter.X > (work.Left + work.Right) / 2 ? bar.Left - w - gap : bar.Right + gap; // справа или слева
+        }
+        // не вылезаем за экран (и за спрятанную панель задач)
+        x = Math.Clamp(x, work.Left + gap, Math.Max(work.Left + gap, work.Right - w - gap));
+        y = Math.Clamp(y, work.Top + gap, Math.Max(work.Top + gap, work.Bottom - h - gap));
+        return (x, y);
+    }
+
+    // свой значок; если он спрятан в «^», Windows вернёт кнопку «^» — тоже то, что нужно
+    private static Native.POINT? IconCenter(Native.RECT bar)
+    {
+        if (TrayIconRect?.Invoke() is not { } r || r.Right <= r.Left || r.Bottom <= r.Top) return null;
+        var c = new Native.POINT { X = (r.Left + r.Right) / 2, Y = (r.Top + r.Bottom) / 2 };
+        // открытое окно скрытых значков — не панель задач, к нему не липнем
+        return c.X >= bar.Left && c.X <= bar.Right && c.Y >= bar.Top && c.Y <= bar.Bottom ? c : null;
+    }
+
+    // запасной вариант: кнопка «^» в начале области уведомлений
+    private static Native.POINT? ChevronCenter(IntPtr taskbar, bool horizontal)
+    {
+        IntPtr notify = FindWindowEx(taskbar, IntPtr.Zero, "TrayNotifyWnd", null);
+        if (notify == IntPtr.Zero || !Native.GetWindowRect(notify, out var tray)) return null;
+        int half = (int)Math.Round(ChevronWidth / 2 * GetDpiForWindow(taskbar) / 96.0);
+        return horizontal
+            ? new Native.POINT { X = tray.Left + half, Y = (tray.Top + tray.Bottom) / 2 }
+            : new Native.POINT { X = (tray.Left + tray.Right) / 2, Y = tray.Top + half };
+    }
+
+    private static (int X, int Y) Corner(int w, int h, int gap)
+    {
+        var area = Native.WorkAreaAt(new Native.POINT { X = 0, Y = 0 }); // основной монитор
+        return (area.Right - w - gap, area.Bottom - h - gap);
     }
 
     private static Brush Frozen(Brush brush) { brush.Freeze(); return brush; }
@@ -104,7 +170,7 @@ internal sealed class JobsWindow : Window
         private readonly Rectangle _shimmer;
         private readonly TextBlock _percent, _status, _cancel;
         private string[]? _saved;
-        private bool _finished;
+        private bool _finished, _cancelled;
 
         public Border Root { get; }
 
@@ -114,19 +180,20 @@ internal sealed class JobsWindow : Window
             _folder = folder;
             _progress = progress;
 
+            // минимум: «имя · проценты» и тонкая полоса; куда сохранится — в подсказке,
+            // крестик — только под мышью, вторая строка — только для текста ошибки
             var title = new TextBlock
             {
                 Text = files.Length == 1 ? Path.GetFileName(files[0]) : Loc.S.FileCount(files.Length),
-                Foreground = Brushes.White, FontSize = 12.5, FontWeight = FontWeights.SemiBold,
-                TextTrimming = TextTrimming.CharacterEllipsis
+                Foreground = Brushes.White, FontSize = 12.5, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis
             };
-            _percent = new TextBlock { Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(8, 0, 0, 0) };
+            _percent = new TextBlock { Foreground = Dim, FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             DockPanel.SetDock(_percent, Dock.Right);
             // крестик: остановить конвертацию, файл не сохраняем
             _cancel = new TextBlock
             {
-                Text = "✕", FontSize = 12, Foreground = Dim, Margin = new Thickness(10, 0, 0, 0), Cursor = Cursors.Hand,
-                ToolTip = Loc.S.JobCancel, Visibility = cancel != null ? Visibility.Visible : Visibility.Collapsed
+                Text = "✕", FontSize = 11, Foreground = Dim, Margin = new Thickness(8, 0, 0, 0), Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center, ToolTip = Loc.S.JobCancel, Visibility = Visibility.Collapsed
             };
             _cancel.MouseEnter += (_, _) => _cancel.Foreground = Brushes.White;
             _cancel.MouseLeave += (_, _) => _cancel.Foreground = Dim;
@@ -134,7 +201,8 @@ internal sealed class JobsWindow : Window
             {
                 e.Handled = true; // не считать кликом по карточке
                 if (_finished || cancel == null) return;
-                _status.Text = Loc.S.JobCancelling;
+                _cancelled = true;
+                _percent.Text = "…";
                 _cancel.Visibility = Visibility.Collapsed;
                 cancel();
             };
@@ -146,34 +214,33 @@ internal sealed class JobsWindow : Window
 
             _status = new TextBlock
             {
-                Text = Loc.S.JobSavingTo(FolderName(folder)), Foreground = Dim, FontSize = 11.5,
-                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 2, 0, 8)
+                Foreground = Dim, FontSize = 11, TextWrapping = TextWrapping.Wrap, MaxHeight = 30,
+                TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 3, 0, 0), Visibility = Visibility.Collapsed
             };
 
-            _bar = new Rectangle { Fill = Accent, RadiusX = 2, RadiusY = 2, RenderTransform = _fill, HorizontalAlignment = HorizontalAlignment.Stretch };
+            _bar = new Rectangle { Fill = Accent, RenderTransform = _fill, HorizontalAlignment = HorizontalAlignment.Stretch };
             // бегущий блик: даже когда процент долго стоит (Edge печатает PDF), видно, что работа идёт
             _shimmer = new Rectangle
             {
-                Width = 70, HorizontalAlignment = HorizontalAlignment.Left,
+                Width = 60, HorizontalAlignment = HorizontalAlignment.Left,
                 Fill = Frozen(new LinearGradientBrush(new GradientStopCollection
                 {
                     new(Color.FromArgb(0, 0xFF, 0xFF, 0xFF), 0),
-                    new(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF), 0.5),
+                    new(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF), 0.5),
                     new(Color.FromArgb(0, 0xFF, 0xFF, 0xFF), 1)
                 }, new Point(0, 0), new Point(1, 0))),
-                RenderTransform = new TranslateTransform(-70, 0)
+                RenderTransform = new TranslateTransform(-60, 0)
             };
             var track = new Grid
             {
-                Height = 4, ClipToBounds = true,
+                Height = 2, ClipToBounds = true, Margin = new Thickness(0, 6, 0, 0),
                 Background = Frozen(new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF)))
             };
             track.Children.Add(_bar);
             track.Children.Add(_shimmer);
-            track.Clip = new RectangleGeometry(new Rect(0, 0, CardWidth - 26, 4), 2, 2);
             if (!Perf.Lite)
                 _shimmer.RenderTransform.BeginAnimation(TranslateTransform.XProperty,
-                    new DoubleAnimation(-70, CardWidth, TimeSpan.FromMilliseconds(1400)) { RepeatBehavior = RepeatBehavior.Forever });
+                    new DoubleAnimation(-60, CardWidth, TimeSpan.FromMilliseconds(1600)) { RepeatBehavior = RepeatBehavior.Forever });
 
             var body = new StackPanel();
             body.Children.Add(header);
@@ -182,12 +249,12 @@ internal sealed class JobsWindow : Window
 
             Root = new Border
             {
-                Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(12, 10, 12, 12), CornerRadius = new CornerRadius(14),
-                BorderThickness = new Thickness(1), Child = body, Cursor = Cursors.Arrow,
-                Background = Frozen(new LinearGradientBrush(Color.FromArgb(0xF0, 0x1E, 0x21, 0x2A), Color.FromArgb(0xF0, 0x14, 0x16, 0x20), 90)),
-                BorderBrush = Frozen(new LinearGradientBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF), Color.FromArgb(0x10, 0xFF, 0xFF, 0xFF), 90)),
-                Opacity = 0
+                Margin = new Thickness(0, 4, 0, 0), Padding = new Thickness(10, 7, 10, 8), CornerRadius = new CornerRadius(10),
+                Child = body, Cursor = Cursors.Arrow, Opacity = 0, ToolTip = Loc.S.JobSavingTo(FolderName(folder)),
+                Background = Frozen(new SolidColorBrush(Color.FromArgb(0x99, 0x10, 0x12, 0x18)))
             };
+            Root.MouseEnter += (_, _) => { if (!_finished && !_cancelled && cancel != null) _cancel.Visibility = Visibility.Visible; };
+            Root.MouseLeave += (_, _) => _cancel.Visibility = Visibility.Collapsed;
             Root.MouseLeftButtonUp += (_, _) => OnClick();
             Root.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(180)));
 
@@ -209,9 +276,8 @@ internal sealed class JobsWindow : Window
         {
             Finish(DoneBrush, "✓");
             _saved = saved;
-            _status.Text = Loc.S.JobSavedIn(FolderName(_folder));
             Root.Cursor = Cursors.Hand;
-            Root.ToolTip = saved.Length == 1 ? saved[0] : _folder;
+            Root.ToolTip = Loc.S.JobSavedIn(FolderName(_folder));
             Linger(DoneLinger);
         }
 
@@ -219,6 +285,7 @@ internal sealed class JobsWindow : Window
         {
             Finish(ErrorBrush, "!");
             _status.Text = message;
+            _status.Visibility = Visibility.Visible;
             Root.ToolTip = message;
             Linger(FailedLinger);
         }

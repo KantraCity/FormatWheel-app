@@ -30,7 +30,6 @@ internal sealed partial class Strings
         JobSavedIn = folder => $"Done, saved to “{folder}” · show",
         Desktop = "Desktop",
         JobCancel = "Cancel conversion",
-        JobCancelling = "Cancelling…",
 
         DragTips = new[]
         {

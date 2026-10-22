@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Security.Principal;
 using System.Threading;
 using System.Windows;
@@ -118,6 +119,7 @@ public partial class App : Application
         _tray = new System.Windows.Forms.NotifyIcon { Icon = LoadAppIcon(), Text = "Format Wheel", Visible = true, ContextMenuStrip = menu };
         _tray.BalloonTipClicked += (_, _) => OnBalloonClicked();
         _tray.BalloonTipClosed += (_, _) => _tipOnScreen = false;
+        JobsWindow.TrayIconRect = TrayIconBounds;
     }
 
     private void FillExtensionsMenu(System.Windows.Forms.ToolStripMenuItem root)
@@ -142,6 +144,32 @@ public partial class App : Application
             LoadConverters();
             Notify("Format Wheel", Loc.S.ExtensionsReloaded(_extensions.Count(x => x.Enabled)));
         });
+    }
+
+    // Где на экране наш значок (если спрятан — кнопка «^»): к нему пристраивается панель фоновых конвертаций.
+    // NotifyIcon не отдаёт свои окно и номер значка, а Windows ищет значок именно по ним — берём через отражение.
+    private Native.RECT? TrayIconBounds()
+    {
+        if (_tray == null) return null;
+        try
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            if (typeof(System.Windows.Forms.NotifyIcon).GetField("_window", flags)?.GetValue(_tray) is not System.Windows.Forms.NativeWindow window
+                || typeof(System.Windows.Forms.NotifyIcon).GetField("_id", flags)?.GetValue(_tray) is not uint id)
+                return null;
+            var icon = new Native.NOTIFYICONIDENTIFIER
+            {
+                cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.NOTIFYICONIDENTIFIER>(),
+                hWnd = window.Handle,
+                uID = id
+            };
+            return Native.Shell_NotifyIconGetRect(ref icon, out var rect) == 0 ? rect : null;
+        }
+        catch (Exception ex)
+        {
+            Log.Write("Tray icon location: " + ex.Message);
+            return null;
+        }
     }
 
     private static System.Drawing.Icon LoadAppIcon()

@@ -30,7 +30,6 @@ internal sealed partial class Strings
         JobSavedIn = folder => $"Готово, лежит в «{folder}» · показать",
         Desktop = "Рабочий стол",
         JobCancel = "Отменить конвертацию",
-        JobCancelling = "Отменяю…",
 
         DragTips = new[]
         {
