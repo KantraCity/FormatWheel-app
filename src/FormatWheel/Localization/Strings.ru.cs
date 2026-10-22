@@ -26,8 +26,11 @@ internal sealed partial class Strings
         ConvertFailedTitle = "Не удалось сконвертировать",
         OriginalDragged = "Перетащен оригинал.",
         GrabFailed = "Не удалось перехватить перетаскивание. Подробности — в журнале (меню в трее).",
-        SavedTitle = "Файл готов",
-        SavedIn = path => $"Сохранено: {path}",
+        JobSavingTo = folder => $"Доделываю → {folder}",
+        JobSavedIn = folder => $"Готово, лежит в «{folder}» · показать",
+        Desktop = "Рабочий стол",
+        JobCancel = "Отменить конвертацию",
+        JobCancelling = "Отменяю…",
 
         DragTips = new[]
         {

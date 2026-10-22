@@ -29,6 +29,7 @@ internal sealed class WheelController
     private readonly WheelWindow _wheel = new();
     private readonly DragGhostWindow _ghost = new();
     private readonly GrabTrapWindow _trap = new();
+    private readonly JobsWindow _jobs = new(); // фоновые конвертации — у трея
     private readonly Action<string, string> _notify;
     private readonly DispatcherTimer _watch;
 
@@ -44,6 +45,7 @@ internal sealed class WheelController
     private bool _leaveSignal;
     private DataObject? _pendingData;
     private Task<string[]>? _conversion;
+    private JobProgress? _conversionProgress; // прогресс той же конвертации — для панели у трея, если доделываем в фоне
     private CancellationTokenSource? _conversionCts;
 
     public WheelController(Action<string, string> notify)
@@ -366,7 +368,12 @@ internal sealed class WheelController
         var cts = new CancellationTokenSource();
         _conversionCts = cts;
 
-        var progress = new Progress<double>(p => _ghost.SetProgress(session, p));
+        var jobProgress = new JobProgress();
+        var progress = new Progress<double>(p =>
+        {
+            _ghost.SetProgress(session, p);
+            jobProgress.Report(p);
+        });
         var sw = Stopwatch.StartNew();
         var conversion = Task.Run(() =>
         {
@@ -384,6 +391,7 @@ internal sealed class WheelController
                 PokeDropTarget();
         }, TaskScheduler.FromCurrentSynchronizationContext());
         _conversion = conversion;
+        _conversionProgress = jobProgress;
     }
 
     // Получатель (Проводник, Telegram, браузер) спрашивает «есть ли файл?» один раз — когда курсор
@@ -505,8 +513,18 @@ internal sealed class WheelController
     private async void DeliverLater(Task<string[]> conversion, string? folder, string[] originals)
     {
         // конвертация теперь сама по себе: следующий драг не должен её заглушить
+        var progress = _conversionProgress ?? new JobProgress();
+        var cts = _conversionCts;
         _conversionCts = null;
         _conversion = null;
+        _conversionProgress = null;
+        // крестик на карточке у трея останавливает конвертацию (ffmpeg, pandoc убиваются через токен)
+        Action? cancel = cts == null || conversion.IsCompleted ? null : () =>
+        {
+            Log.Write("Background conversion cancelled from the tray panel");
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        };
+        var card = _jobs.Add(originals, folder ?? Path.GetDirectoryName(originals[0])!, progress, cancel);
         Log.Write((conversion.IsCompleted ? "Drop refused, " : "Dropped before the result was ready, ")
             + "will save to " + (folder ?? "the source folder"));
         try
@@ -515,13 +533,15 @@ internal sealed class WheelController
             string[] saved = await Task.Run(() => results.Select((file, i) =>
                 SaveCopy(file, folder ?? Path.GetDirectoryName(originals[Math.Min(i, originals.Length - 1)])!)).ToArray());
             Log.Write("Saved: " + string.Join(" | ", saved));
-            _notify(Loc.S.SavedTitle, Loc.S.SavedIn(saved.Length == 1 ? saved[0] : Path.GetDirectoryName(saved[0])!));
+            card.Done(saved); // вместо уведомления: карточка у трея становится зелёной, клик — показать файл
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { card.Remove(); }
+        // отменили крестиком: Parallel.For может завернуть отмену в AggregateException — это не ошибка
+        catch (Exception) when (cts?.IsCancellationRequested == true) { card.Remove(); }
         catch (Exception ex)
         {
             Log.Write("Conversion failed: " + ex);
-            _notify(Loc.S.ConvertFailedTitle, ex.Message);
+            card.Failed(ex.Message);
         }
     }
 

@@ -14,7 +14,7 @@
     <AssemblyName>FormatWheel</AssemblyName>
     <ApplicationIcon>icon.ico</ApplicationIcon>
 
-    <Version>1.0.4</Version>
+    <Version>1.0.5</Version>
     <Product>Format Wheel</Product>
     <Description>Convert files on the fly while dragging them</Description>
     <SatelliteResourceLanguages>ru;en</SatelliteResourceLanguages>

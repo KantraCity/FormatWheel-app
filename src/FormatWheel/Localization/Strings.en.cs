@@ -26,8 +26,11 @@ internal sealed partial class Strings
         ConvertFailedTitle = "Conversion failed",
         OriginalDragged = "The original file was dropped instead.",
         GrabFailed = "Couldn't take over the drag. See the log (tray menu) for details.",
-        SavedTitle = "File is ready",
-        SavedIn = path => $"Saved: {path}",
+        JobSavingTo = folder => $"Finishing → {folder}",
+        JobSavedIn = folder => $"Done, saved to “{folder}” · show",
+        Desktop = "Desktop",
+        JobCancel = "Cancel conversion",
+        JobCancelling = "Cancelling…",
 
         DragTips = new[]
         {

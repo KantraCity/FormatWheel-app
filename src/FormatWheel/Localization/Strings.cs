@@ -28,8 +28,13 @@ internal sealed partial class Strings
     public required string ConvertFailedTitle { get; init; }
     public required string OriginalDragged { get; init; }
     public required string GrabFailed { get; init; }
-    public required string SavedTitle { get; init; }
-    public required Func<string, string> SavedIn { get; init; }
+
+    // панель фоновых конвертаций у трея
+    public required Func<string, string> JobSavingTo { get; init; }
+    public required Func<string, string> JobSavedIn { get; init; }
+    public required string Desktop { get; init; }
+    public required string JobCancel { get; init; }
+    public required string JobCancelling { get; init; }
 
     // напоминалки во время обычного драга (DragTips): заголовок — случайная фраза
     public required string[] DragTips { get; init; }
