@@ -222,7 +222,8 @@ internal sealed class WheelController
         bool withActions = _state != State.OwnDragWheel;
 
         if (_menus == null || _menus.Files != files || _menus.Converter != _converter || _menus.WithActions != withActions)
-            _menus = new MenuCache(_converter, files, withActions, new());
+            _menus = new MenuCache(_converter, files, withActions, new(),
+                new(() => withActions ? Converters.ActionsFor(files) : Array.Empty<WheelAction>()));
         var cache = _menus;
 
         // MenuFor может читать файлы (размер картинки), поэтому и меню, и число слотов — не в UI-потоке
@@ -240,19 +241,20 @@ internal sealed class WheelController
     private IReadOnlyList<WheelOption> _slotOptions = Array.Empty<WheelOption>();
 
     // меню слотов на текущие файлы считаем один раз за драг, а не на каждое переключение Ctrl/Alt
-    private sealed record MenuCache(IConverter? Converter, string[] Files, bool WithActions, ConcurrentDictionary<WheelSlot, IReadOnlyList<WheelOption>> Menus);
+    // действия расширений спрашиваем один раз за драг, а раскладываем по слотам, которые они выбрали
+    private sealed record MenuCache(IConverter? Converter, string[] Files, bool WithActions,
+        ConcurrentDictionary<WheelSlot, IReadOnlyList<WheelOption>> Menus, Lazy<IReadOnlyList<WheelAction>> Actions);
     private MenuCache? _menus;
 
     // ось-метка лепестков-действий: их значение — сам WheelAction, в рецепт они не попадают
     private const string ActionAxis = "formatwheel.action";
 
-    // форматы конвертера, а в основном меню после них — действия расширений
+    // лепестки конвертера, а после них — действия расширений, которые выбрали этот слот
     private static IReadOnlyList<WheelOption> Menu(MenuCache cache, WheelSlot slot) =>
         cache.Menus.GetOrAdd(slot, s =>
         {
             var options = cache.Converter?.MenuFor(s, cache.Files).ToList() ?? new List<WheelOption>();
-            if (s == WheelSlot.Primary && cache.WithActions)
-                options.AddRange(Converters.ActionsFor(cache.Files).Select(a => new WheelOption(ActionAxis, a, a.Label, a.Hint, a.Icon)));
+            options.AddRange(cache.Actions.Value.Where(a => a.Slot == s).Select(a => new WheelOption(ActionAxis, a, a.Label, a.Hint, a.Icon)));
             return options;
         });
 

@@ -10,7 +10,7 @@
 
     <!-- для публикации пакета, которым пользуются авторы расширений -->
     <PackageId>FormatWheel.Sdk</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>KantraCity</Authors>
     <Description>SDK for writing Format Wheel extensions (converters and actions).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

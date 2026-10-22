@@ -18,7 +18,7 @@ public interface IWheelActions
     // true — для файлов этого типа у нас есть действия
     bool CanHandle(string path);
 
-    // действия для этих файлов; лепестки встают в основное меню (Shift) после форматов
+    // действия для этих файлов; каждое встаёт в свой слот (Slot) после лепестков конвертера
     IReadOnlyList<WheelAction> ActionsFor(IReadOnlyList<string> files);
 }
 
@@ -29,4 +29,9 @@ public sealed record WheelAction(
     string Label,
     string Hint,
     Func<IReadOnlyList<string>, Action<double>, CancellationToken, Task> Run,
-    Icon? Icon = null);
+    Icon? Icon = null)
+{
+    // в каком меню колеса лепесток (SDK 1.2+); по умолчанию основное, Shift.
+    // Например, new WheelAction(...) { Slot = WheelSlot.Alt } — на Alt+Shift, подальше от форматов.
+    public WheelSlot Slot { get; init; } = WheelSlot.Primary;
+}
